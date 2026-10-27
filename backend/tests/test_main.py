@@ -13,8 +13,8 @@ def test_root_endpoint():
     assert response.status_code == 200
 
     assert response.json() == {
-        "message": "Home Air Quality Monitor API",
-        "version": "0.1.0"
+    "message": "Home Air Quality Monitor API",
+    "version": "0.2.0"
     }
 
 
