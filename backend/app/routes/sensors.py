@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,19 +22,13 @@ router = APIRouter(
 def get_sensors(
     db: Annotated[Session, Depends(get_db)],
 ):
-    """
-    Retrieve all active sensors.
-    """
-
     statement = (
         select(Sensor)
         .where(Sensor.is_archived.is_(False))
         .order_by(Sensor.id)
     )
 
-    sensors = db.scalars(statement).all()
-
-    return sensors
+    return db.scalars(statement).all()
 
 
 @router.get(
@@ -45,10 +39,6 @@ def get_sensor(
     sensor_id: int,
     db: Annotated[Session, Depends(get_db)],
 ):
-    """
-    Retrieve a sensor by its ID.
-    """
-
     sensor = db.get(Sensor, sensor_id)
 
     if sensor is None or sensor.is_archived:
