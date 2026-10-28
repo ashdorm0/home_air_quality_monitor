@@ -101,7 +101,7 @@ cd backend
 python -m alembic upgrade head
 ```
 
-This creates the database schema defined by the SQLAlchemy models, if the migration has been generated as described in Day 2.
+This creates the database schema defined by the SQLAlchemy models, if the migration has been generated as described.
 
 ### 5. Seed development locations and sensors
 
@@ -154,7 +154,7 @@ The initial schema contains:
 
 Relations: **Location → Sensors → Readings** (one-to-many at each step).
 
-The Day 2 design enforces uniqueness for the combination of **sensor ID + metric + observation timestamp**. The incoming timestamp must be timezone-aware and is normalised to UTC. Invalid metric/unit combinations and out-of-range values are rejected. Range limits currently used in the prototype are engineering validation choices, **not** WHO/EPA health categories.
+The design enforces uniqueness for the combination of **sensor ID + metric + observation timestamp**. The incoming timestamp must be timezone-aware and is normalised to UTC. Invalid metric/unit combinations and out-of-range values are rejected. Range limits currently used in the prototype are engineering validation choices, **not** WHO/EPA health categories.
 
 ## API endpoints
 
@@ -169,7 +169,7 @@ The Day 2 design enforces uniqueness for the combination of **sensor ID + metric
 | `GET` | `/sensors/{sensor_id}/readings` | Historical readings; optional `metric` and `limit` |
 | `GET` | `/sensors/{sensor_id}/latest` | Latest stored reading for each available metric |
 
-The endpoints above describe the **Day 2 implementation plan**. Confirm their availability in `/docs` against the running application.
+Confirm their availability in `/docs` against the running application.
 
 ### Example: submit a PM2.5 reading
 
@@ -187,7 +187,7 @@ curl -X POST http://127.0.0.1:8000/readings \
   }'
 ```
 
-Expected statuses in the Day 2 design:
+Expected statuses
 
 | Status | Meaning |
 | --- | --- |
@@ -324,8 +324,6 @@ cd backend
 python -m pytest tests -v
 ```
 
-The Day 2 guide defines two Day 1 tests plus nine API tests, covering HTTP health, retrieval, successful ingestion, validation and duplicate prevention. **Their final results have not been supplied.**
-
 **Simulator tests** do not require FastAPI or PostgreSQL:
 
 ```bash
@@ -334,12 +332,6 @@ python -m pytest simulator/tests -v
 ```
 
 The Day 3 test file is designed to check total counts, metric/unit correctness, repeatability, five-minute spacing, indoor/outdoor scenario behaviour and the outage. The expected suite contains **10 tests**; **a passing run has not yet been confirmed**.
-
-### What has actually been verified
-
-- Day 1 completion: confirmed by developer.
-- Day 3 preview: executed successfully; reported `1,692` generated readings and displayed readings from both sensor IDs.
-- Day 2 API and full Day 3 replay/test pass counts: **not yet evidenced in this README**.
 
 ## Stopping and restarting the local database
 
