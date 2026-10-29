@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -14,7 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Reading, Sensor
-from app.schemas import ReadingCreate, ReadingResponse
+from app.schemas import ReadingCreate, ReadingResponse, MetricStatus, SensorStatusResponse
+from app.monitoring import calculate_freshness, REPORTING_INTERVAL_MINUTES, STALE_AFTER_MINUTES
 
 
 router = APIRouter(
@@ -95,22 +97,66 @@ def create_reading(
 def get_sensor_readings(
     sensor_id: int,
     db: Annotated[Session, Depends(get_db)],
+
     metric: Literal[
         "pm25",
         "temperature",
         "humidity",
     ] | None = None,
+
+    start: datetime | None = None,
+    end: datetime | None = None,
+
     limit: int = Query(
         default=100,
         ge=1,
-        le=1000,
+        le=10000,
     ),
 ):
     """
-    Retrieve historical readings for a sensor.
+    Retrieve readings for a sensor.
+
+    Supports:
+    - Optional metric filtering
+    - Optional UTC date-range filtering
+    - Result limits
+
+    Date filtering uses:
+        observed_at >= start
+        observed_at < end
+
+    Results are returned newest first.
     """
 
     require_sensor(sensor_id, db)
+
+    for name, timestamp in (
+        ("start", start),
+        ("end", end),
+    ):
+        if timestamp is not None and timestamp.tzinfo is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{name} must include timezone information"
+                ),
+            )
+
+    if start is not None:
+        start = start.astimezone(timezone.utc)
+
+    if end is not None:
+        end = end.astimezone(timezone.utc)
+
+    if (
+        start is not None
+        and end is not None
+        and start >= end
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="start must be earlier than end",
+        )
 
     statement = (
         select(Reading)
@@ -122,15 +168,26 @@ def get_sensor_readings(
             Reading.metric == metric
         )
 
+    if start is not None:
+        statement = statement.where(
+            Reading.observed_at >= start
+        )
+
+    if end is not None:
+        statement = statement.where(
+            Reading.observed_at < end
+        )
+
     statement = (
         statement
-        .order_by(Reading.observed_at.desc())
+        .order_by(
+            Reading.observed_at.desc(),
+            Reading.id.desc(),
+        )
         .limit(limit)
     )
 
-    readings = db.scalars(statement).all()
-
-    return readings
+    return db.scalars(statement).all()
 
 
 @router.get(
@@ -176,3 +233,98 @@ def get_latest_readings(
             latest_readings.append(reading)
 
     return latest_readings
+
+@router.get(
+    "/sensors/{sensor_id}/status",
+    response_model=SensorStatusResponse,
+)
+def get_sensor_status(
+    sensor_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    as_of: datetime | None = None,
+):
+    """
+    Retrieve latest measurements and freshness status.
+
+    as_of can be used to inspect historical status.
+    Defaults to the current UTC time.
+    """
+
+    sensor = require_sensor(sensor_id, db)
+
+    if as_of is not None and as_of.tzinfo is None:
+        raise HTTPException(
+            status_code=422,
+            detail="as_of must include timezone information",
+        )
+
+    reference_time = (
+        as_of.astimezone(timezone.utc)
+        if as_of is not None
+        else datetime.now(timezone.utc)
+    )
+
+    metrics = [
+        "pm25",
+        "temperature",
+        "humidity",
+    ]
+
+    metric_statuses = []
+
+    for metric in metrics:
+
+        statement = (
+            select(Reading)
+            .where(
+                Reading.sensor_id == sensor_id,
+                Reading.metric == metric,
+                Reading.observed_at <= reference_time,
+            )
+            .order_by(
+                Reading.observed_at.desc(),
+                Reading.id.desc(),
+            )
+            .limit(1)
+        )
+
+        reading = db.scalar(statement)
+
+        if reading is None:
+
+            metric_statuses.append(
+                MetricStatus(
+                    metric=metric,
+                    status="no_data",
+                    latest_reading=None,
+                    age_minutes=None,
+                )
+            )
+
+            continue
+
+        freshness, age = calculate_freshness(
+            reading.observed_at,
+            reference_time,
+        )
+
+        metric_statuses.append(
+            MetricStatus(
+                metric=metric,
+                status=freshness,
+                latest_reading=reading,
+                age_minutes=age,
+            )
+        )
+
+    return SensorStatusResponse(
+        sensor_id=sensor.id,
+        sensor_name=sensor.name,
+        source_type=sensor.source_type,
+        reporting_interval_minutes=(
+            REPORTING_INTERVAL_MINUTES
+        ),
+        stale_after_minutes=STALE_AFTER_MINUTES,
+        checked_at=reference_time,
+        metrics=metric_statuses,
+    )

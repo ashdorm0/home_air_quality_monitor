@@ -115,3 +115,29 @@ class ReadingResponse(BaseModel):
     received_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+    
+class MetricStatus(BaseModel):
+    metric: str
+
+    status: Literal[
+        "fresh",
+        "stale",
+        "no_data",
+    ]
+
+    latest_reading: ReadingResponse | None
+
+    age_minutes: float | None
+
+
+class SensorStatusResponse(BaseModel):
+    sensor_id: int
+    sensor_name: str
+    source_type: str
+
+    reporting_interval_minutes: int
+    stale_after_minutes: int
+
+    checked_at: datetime
+
+    metrics: list[MetricStatus]
