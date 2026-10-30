@@ -65,13 +65,15 @@ Install dependencies:
 python -m pip install -r requirements.txt
 ```
 
-The Day 1–3 dependencies include FastAPI (with Uvicorn), SQLAlchemy, Psycopg, python-dotenv, pytest, Alembic and HTTPX.
+The project dependencies include FastAPI (with Uvicorn), SQLAlchemy, Psycopg, python-dotenv, pytest, Alembic and HTTPX.
 
 ### 2. Configure local environment variables
 
 ```bash
 cp .env.example .env
 ```
+
+The committed `.env.example` is currently empty. Populate your local `.env` with the example keys below; do not put real credentials in the repository.
 
 Edit `.env` for your local configuration:
 
@@ -166,10 +168,13 @@ The design enforces uniqueness for the combination of **sensor ID + metric + obs
 | `GET` | `/sensors` | List active sensors |
 | `GET` | `/sensors/{sensor_id}` | Get a sensor |
 | `POST` | `/readings` | Validate and store a reading |
-| `GET` | `/sensors/{sensor_id}/readings` | Historical readings; optional `metric` and `limit` |
+| `GET` | `/sensors/{sensor_id}/readings` | Historical readings; optional `metric`, timezone-aware `start`/`end`, and `limit` (1–10,000) |
 | `GET` | `/sensors/{sensor_id}/latest` | Latest stored reading for each available metric |
+| `GET` | `/sensors/{sensor_id}/status` | Per-metric latest reading and `fresh`/`stale`/`no_data` status; optional timezone-aware `as_of` |
 
-Confirm their availability in `/docs` against the running application.
+Confirm their availability in `/docs` against the running application. Date-range filtering uses inclusive `start` and exclusive `end` (`start <= observed_at < end`). The API rejects missing timezone information and reversed ranges.
+
+Readings are treated as **fresh** when at most 15 minutes old (three five-minute intervals), **stale** when older than 15 minutes, and **no_data** when no observation exists at the reference time. The `/status` endpoint supports `as_of` so historical status can be inspected. Status is calculated for each metric separately.
 
 ### Example: submit a PM2.5 reading
 
@@ -198,7 +203,7 @@ Expected statuses
 
 Swagger's sample `sensor_id` is just a placeholder; **posting a reading does not create a sensor**.
 
-## Sensor simulator (Day 3)
+## Sensor simulator
 
 The simulator generates **synthetic**, reproducible readings for one indoor and one outdoor sensor. The default dataset begins at `2026-10-27T00:00:00Z`, uses seed `42`, and covers **288 five-minute observation intervals (24 hours)**.
 
@@ -235,7 +240,7 @@ python -m simulator.simulator \
 
 Replace both IDs with those returned by `GET /sensors` if needed. Preview mode generates the data locally **without checking whether the IDs exist in PostgreSQL**.
 
-**Confirmed output from this project's Day 3 run:**
+**Previously recorded simulator preview output:**
 
 ```text
 Home Air Quality Monitor Simulator
@@ -317,21 +322,25 @@ Use `\q` to exit `psql`. If other data was uploaded for that day, narrow the que
 
 ## Testing
 
-**Backend tests** require a running PostgreSQL development database:
+Backend tests are in `backend/tests/`. They include API input validation, duplicate prevention, historical filtering, sensor freshness, and simulator-to-PostgreSQL integration. **These tests require PostgreSQL and suitable database configuration.** The integration module specifically refuses to run unless `DB_NAME=air_quality_test` to reduce the risk of changing development data.
+
+Create a **separate PostgreSQL test database** with the same connection credentials, apply the Alembic migration to that database, and then run:
 
 ```bash
+# In a separate shell/environment configured for the test database:
+export DB_NAME=air_quality_test
 cd backend
+python -m alembic upgrade head
 python -m pytest tests -v
 ```
 
-**Simulator tests** do not require FastAPI or PostgreSQL:
+Ensure Docker/PostgreSQL is running, that the test database exists, and that its configured user has appropriate access. Do **not** point tests at a database containing valuable data. Backend tests write temporary records and attempt to clean them up.
 
-```bash
-# Run from repository root
-python -m pytest simulator/tests -v
-```
+`backend/tests/test_monitoring.py` covers the 15-minute freshness boundary and missing data. `backend/tests/test_integration.py` checks simulator ingestion, stored counts, duplicate replay, date filtering, and gaps during an outage.
 
-The Day 3 test file is designed to check total counts, metric/unit correctness, repeatability, five-minute spacing, indoor/outdoor scenario behaviour and the outage. The expected suite contains **10 tests**; **a passing run has not yet been confirmed**.
+**Test execution status:** A successful full automated test run and complete end-to-end database replay have not been verified in this repository. The GitHub-connected review environment could inspect the source but could not run PostgreSQL-backed tests. Do not interpret the presence of tests as evidence that they all pass.
+
+`simulator/tests/test_simulator.py` is currently empty; there is no standalone simulator test suite to run from that directory. Simulator behaviour is partially exercised by the backend integration tests. The recorded preview output above demonstrates generation of 1,692 measurements, but does not verify database insertion.
 
 ## Stopping and restarting the local database
 
@@ -353,9 +362,9 @@ The project specification identifies nine core requirements and two extensions. 
 | FR1 | Accounts, authentication, household isolation | Not implemented |
 | FR2 | Create/view/rename/archive locations and sensors | Initial models and read endpoints; management incomplete |
 | FR3 | Authenticated reading ingestion with validation | Local ingestion and validation; authentication outstanding |
-| FR4 | Repeatable simulator and scenario replay | Preview verified; replay/database verification pending |
-| FR5 | Latest readings, source labels and freshness | Latest stored-reading endpoint planned; stale status outstanding |
-| FR6 | Historical charts and comparisons | Historical API retrieval; charts not implemented |
+| FR4 | Repeatable simulator and scenario replay | Simulator implemented; recorded preview output available; full replay verification pending |
+| FR5 | Latest readings, source labels and freshness | Latest and status endpoints implemented; no UI yet |
+| FR6 | Historical charts and comparisons | API retrieval supports metric and date filters; charts/comparisons not implemented |
 | FR7 | WHO PM2.5 guidance / eligible outdoor EPA-derived estimates | Not implemented |
 | FR8 | Per-sensor PM2.5 threshold alerts | Not implemented |
 | FR9 | Authenticated REST interface and versioned guidance | Initial REST/OpenAPI docs; authentication and guidance outstanding |
@@ -366,16 +375,15 @@ The project specification identifies nine core requirements and two extensions. 
 
 The planned full application will compare supported **24-hour PM2.5 averages** with WHO guidance, and calculate eligible **outdoor-only** EPA-derived PM2.5 indices with documented averaging, coverage, source and rounding rules. It will not label indoor data as an official EPA AQI or claim regulatory compliance from WHO comparisons.
 
-The specification also calls for household isolation, hashed passwords, HTTPS in deployment, preserved UTC timestamps, explicit missing-data gaps, source/version labels, threshold alerts and evidence-based acceptance checks. These remain future work.
+The specification also calls for household isolation, hashed passwords, HTTPS in deployment, guidance source/version labels, threshold alerts, accessible charts and evidence-based acceptance checks. These remain future work. UTC timestamps are already validated and stored; the simulator omits outage readings rather than inserting zeros.
 
 ## Next steps
 
-1. Execute an end-to-end replay against the API and verify database counts/units/timestamps.
-2. Confirm duplicate replay does not alter stored totals.
-3. Run the API and simulator automated tests, recording actual results.
-4. Add reading freshness/stale detection after three missed five-minute intervals.
-5. Improve historical queries with date-range filtering and missing-data handling.
-6. Review validation, error handling and test evidence.
+1. Run all backend tests against a dedicated PostgreSQL test database and record their results.
+2. Complete an end-to-end simulator replay and verify stored counts, metric units, timestamps, and duplicate handling.
+3. Add direct, automated simulator tests rather than relying solely on integration coverage.
+4. Implement authentication and account-specific access controls before any public deployment.
+5. Complete sensor management, monitoring presentation, interpretation, and alerts in later iterations.
 
 ## References
 
